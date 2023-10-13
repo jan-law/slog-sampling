@@ -1,6 +1,7 @@
 package slogsampling
 
 import (
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -33,10 +34,22 @@ func (c *counter) Inc(t time.Time, tick time.Duration) uint64 {
 	return 1
 }
 
-type counters map[slog.Level]*[countersPerLevel]counter
+type counters struct {
+	customLevelCounter map[slog.Level]*[countersPerLevel]counter
+	debugCtr           [countersPerLevel]*counter
+	infoCtr            [countersPerLevel]*counter
+	warnCtr            [countersPerLevel]*counter
+	errCtr             [countersPerLevel]*counter
+	mu                 sync.RWMutex
+}
 
 func newCounters() *counters {
-	return &counters{}
+	return &counters{
+		debugCtr: [countersPerLevel]*counter{},
+		infoCtr:  [countersPerLevel]*counter{},
+		warnCtr:  [countersPerLevel]*counter{},
+		errCtr:   [countersPerLevel]*counter{},
+	}
 }
 
 func (cs *counters) get(lvl slog.Level, record slog.Record) *counter {
@@ -44,10 +57,24 @@ func (cs *counters) get(lvl slog.Level, record slog.Record) *counter {
 	hash := fnv32a(key)
 	n := hash % countersPerLevel
 
-	_, ok := (*cs)[lvl]
-	if !ok {
-		(*cs)[lvl] = &[countersPerLevel]counter{}
+	switch lvl {
+	case slog.LevelDebug:
+		return cs.debugCtr[n]
+	case slog.LevelInfo:
+		return cs.infoCtr[n]
+	case slog.LevelWarn:
+		return cs.warnCtr[n]
+	case slog.LevelError:
+		return cs.errCtr[n]
+	default:
+		cs.mu.RLock()
+		defer cs.mu.RUnlock()
+		_, ok := cs.customLevelCounter[lvl]
+		if !ok {
+			cs.customLevelCounter[lvl] = &[countersPerLevel]counter{}
+		}
+
+		return &cs.customLevelCounter[lvl][n]
 	}
 
-	return &(*cs)[lvl][n]
 }
